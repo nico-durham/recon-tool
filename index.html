@@ -1069,6 +1069,44 @@
             transform: scale(1.1);
         }
 
+        .cust-cell {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .copy-code-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 22px;
+            height: 22px;
+            padding: 0;
+            border: none;
+            border-radius: 5px;
+            background: rgba(160,160,160,0.12);
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.15s;
+            flex-shrink: 0;
+        }
+
+        .copy-code-btn svg {
+            width: 13px;
+            height: 13px;
+        }
+
+        .copy-code-btn:hover {
+            background: rgba(160,160,160,0.22);
+            color: #e0e0e0;
+            transform: scale(1.1);
+        }
+
+        .copy-code-btn.copied {
+            background: rgba(34,197,94,0.18);
+            color: var(--success);
+        }
+
         .loading {
             display: none;
             text-align: center;
@@ -3117,6 +3155,11 @@
                 document.getElementById('file2-name').textContent = `✓ ${displayName} (${normalized.length} rows)`;
                 reconcileBtn.disabled = !(file1Data && file2Data);
                 showToast(`Loaded "${displayName}" (${normalized.length} rows) ✓`, 'success');
+
+                // Auto-reconcile as soon as a payroll is selected (when File 1 is loaded)
+                if (file1Data && file2Data) {
+                    setTimeout(() => runReconciliation(), 300);
+                }
             } catch (e) {
                 console.error('loadPayrollFromSheet error:', e);
                 showToast('Failed to load: ' + e.message, 'error');
@@ -4430,6 +4473,51 @@
         }
 
         // ============================================================
+        // COPY CUSTOMER CODE TO CLIPBOARD (table cell helper)
+        // ============================================================
+        const COPY_ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>';
+        const CHECK_ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.4" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" /></svg>';
+
+        function copyCodeButtonHTML(code) {
+            const safe = String(code).replace(/'/g, "\\'");
+            return `<button type="button" class="copy-code-btn" title="Copy customer code" onclick="copyCustomerCode(this, '${safe}')">${COPY_ICON_SVG}</button>`;
+        }
+
+        function copyCustomerCode(btn, code) {
+            const text = String(code);
+            const flashCopied = () => {
+                btn.classList.add('copied');
+                btn.innerHTML = CHECK_ICON_SVG;
+                showToast('Customer code ' + text + ' copied', 'success');
+                setTimeout(() => {
+                    btn.classList.remove('copied');
+                    btn.innerHTML = COPY_ICON_SVG;
+                }, 1200);
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(flashCopied).catch(() => fallbackCopyText(text, flashCopied));
+            } else {
+                fallbackCopyText(text, flashCopied);
+            }
+        }
+
+        function fallbackCopyText(text, onDone) {
+            try {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+                onDone();
+            } catch (e) {
+                showToast('Could not copy to clipboard', 'error');
+            }
+        }
+
+        // ============================================================
         // RENDER UNIFIED TABLE (2 rows per visit)
         // ============================================================
         function renderUnifiedTable() {
@@ -4497,7 +4585,7 @@
                     tr1.className = `row-payment ${groupClass} ${reconClass}`;
                     tr1.innerHTML = `
                         <td rowspan="2" class="date-cell">${formatDate(row.serviceDate)}${warningsHTML}</td>
-                        <td rowspan="2">${row.customerCode}</td>
+                        <td rowspan="2"><span class="cust-cell"><span>${row.customerCode}</span>${copyCodeButtonHTML(row.customerCode)}</span></td>
                         <td rowspan="2">${row.servicesDisplay}</td>
                         <td><span class="type-label type-payment">Client Paid</span></td>
                         <td>${row.owedFile1 !== undefined ? '$' + row.owedFile1.toFixed(2) : '-'}</td>
@@ -4538,7 +4626,7 @@
                     tr.className = `row-single ${groupClass} ${reconClass}`;
                     tr.innerHTML = `
                         <td class="date-cell">${formatDate(row.serviceDate)}${warningsHTML}</td>
-                        <td>${row.customerCode}</td>
+                        <td><span class="cust-cell"><span>${row.customerCode}</span>${copyCodeButtonHTML(row.customerCode)}</span></td>
                         <td>${row.servicesDisplay}</td>
                         <td><span class="type-label type-payment">Client Paid</span></td>
                         <td>${row.owedFile1 !== undefined ? '$' + row.owedFile1.toFixed(2) : '-'}</td>
