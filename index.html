@@ -2412,6 +2412,7 @@
                     showToast('Connected to Google Sheets ✓', 'success');
                     if (reconciliationResults) renderOrphanCards();
                     listSavedPayrolls(); // Load saved payrolls dropdown
+                    if (!file1Data) fetchFromDrive(); // Load File 1 now that we have a token
                 }
             });
             client.requestAccessToken();
@@ -2679,7 +2680,6 @@
         // GOOGLE SHEETS CONFIG
         // ============================================================
         const FILE1_SHEET_ID = '1TVQWHJBoEjBlKxX9IJV0zi0YO6gCj9QDvRtz-IRpJ88';
-        const FILE1_PUB_KEY = '2PACX-1vT96iuATLGpeDc_d1KHtAklllD9wiDjLOa0m9It2DgPwe4cq210MzOPqJgMVLMpQVAMg8kEG8s8W7V7';
 
         let file1Data = null;
         let file2Data = null;
@@ -2739,85 +2739,28 @@
                 }
             };
 
-            // ── Strategy 1: Sheets API (live, no cache) — requires sign-in ──
-            if (isGoogleAuthed()) {
-                try {
-                    const rows = await sheetsGet(SHEET_NAME);
-
-                    // Find header row
-                    let headerIdx = 0;
-                    for (let i = 0; i < Math.min(10, rows.length); i++) {
-                        if (rows[i].some(c => c && (c.includes('Customer No') || c.includes('Customer Code')))) {
-                            headerIdx = i; break;
-                        }
-                    }
-
-                    const headers = rows[headerIdx];
-                    const dataRows = rows.slice(headerIdx + 1);
-                    const normalized = dataRows.map(row => {
-                        const obj = {};
-                        headers.forEach((col, idx) => {
-                            if (col && col.trim()) {
-                                let val = row[idx] !== undefined ? row[idx] : null;
-                                const colName = col.trim();
-                                if (val === '' || val === null) {
-                                    val = null;
-                                } else if (!colName.toLowerCase().includes('date')) {
-                                    // Handle actual numbers (from UNFORMATTED_VALUE API) directly
-                                    if (typeof val === 'number') {
-                                        // already a number — keep as-is
-                                    } else {
-                                        // Strip currency symbols/whitespace from CSV path
-                                        const cleaned = String(val).replace(/[$,\s]/g, '');
-                                        if (cleaned !== '' && !isNaN(Number(cleaned))) {
-                                            val = Number(cleaned);
-                                        }
-                                    }
-                                }
-                                obj[colName] = val;
-                            }
-                        });
-                        return obj;
-                    }).filter(row => Object.values(row).some(v => v !== null && v !== undefined));
-
-                    onFetchSuccess(normalized, fetchBtn, fileName);
-                    finish(true, 'Live data loaded from Google Sheets ✓');
-                    return;
-                } catch (e) {
-                    const msg = e.message;
-                    if (msg === 'SESSION_EXPIRED') {
-                        finish(false, 'Session expired — please sign in again');
-                        setTimeout(handleGoogleSignIn, 1000);
-                        return;
-                    }
-                    if (msg === 'NO_ACCESS') {
-                        finish(false, 'Access denied — make sure you\'re signed in with the right account');
-                        return;
-                    }
-                    // Any other API error — fall through to CSV
-                }
+            // ── Authenticated Sheets API read (live, no cache) — requires sign-in ──
+            if (!isGoogleAuthed()) {
+                finish(false, 'Sign in with Google to refresh data');
+                setTimeout(handleGoogleSignIn, 600);
+                return;
             }
 
-            // ── Strategy 2: Published CSV (cached ~5-10 min by Google) ──
             try {
-                const csvUrl = `https://docs.google.com/spreadsheets/d/e/${FILE1_PUB_KEY}/pub?output=csv&cachebust=${Date.now()}`;
-                const response = await fetch(csvUrl, { cache: 'no-store' });
-                if (response.ok) {
-                    const csvText = await response.text();
-                    if (csvText && csvText.length > 50 && !csvText.includes('<!DOCTYPE')) {
-                        const rows = parseCSV(csvText);
-                        const normalizedData = csvToNormalizedData(rows);
-                        onFetchSuccess(normalizedData, fetchBtn, fileName);
-                        finish(true, 'Data refreshed ✓ — sign in with Google for instant live updates (CSV may lag 5–10 min)');
-                        return;
-                    }
-                }
-                // Fallback to JSONP
-                const data = await fetchViaJSONP();
-                onFetchSuccess(data, fetchBtn, fileName);
-                finish(true, 'Data refreshed ✓ — sign in with Google for instant live updates');
+                const rows = await sheetsGet(SHEET_NAME);
+                const normalized = csvToNormalizedData(rows);
+                onFetchSuccess(normalized, fetchBtn, fileName);
+                finish(true, 'Live data loaded from Google Sheets ✓');
             } catch (e) {
-                finish(false, 'Could not refresh — check your connection and sheet is published to web');
+                const msg = e.message;
+                if (msg === 'SESSION_EXPIRED') {
+                    finish(false, 'Session expired — please sign in again');
+                    setTimeout(handleGoogleSignIn, 1000);
+                } else if (msg === 'NO_ACCESS') {
+                    finish(false, 'Access denied — make sure you\'re signed in with the right account');
+                } else {
+                    finish(false, 'Could not refresh — check your connection and sheet access');
+                }
             }
         }
         // ============================================================
@@ -3203,56 +3146,7 @@
         }
 
         // ============================================================
-        // CSV PARSER (handles quoted fields, commas inside quotes, etc.)
-        // ============================================================
-        function parseCSV(text) {
-            const rows = [];
-            let currentRow = [];
-            let currentField = '';
-            let inQuotes = false;
-
-            for (let i = 0; i < text.length; i++) {
-                const ch = text[i];
-                const next = text[i + 1];
-
-                if (inQuotes) {
-                    if (ch === '"' && next === '"') {
-                        currentField += '"';
-                        i++; // skip escaped quote
-                    } else if (ch === '"') {
-                        inQuotes = false;
-                    } else {
-                        currentField += ch;
-                    }
-                } else {
-                    if (ch === '"') {
-                        inQuotes = true;
-                    } else if (ch === ',') {
-                        currentRow.push(currentField);
-                        currentField = '';
-                    } else if (ch === '\n' || (ch === '\r' && next === '\n')) {
-                        currentRow.push(currentField);
-                        currentField = '';
-                        if (currentRow.length > 1 || currentRow[0] !== '') {
-                            rows.push(currentRow);
-                        }
-                        currentRow = [];
-                        if (ch === '\r') i++; // skip \n after \r
-                    } else {
-                        currentField += ch;
-                    }
-                }
-            }
-            // Last field/row
-            if (currentField || currentRow.length > 0) {
-                currentRow.push(currentField);
-                rows.push(currentRow);
-            }
-            return rows;
-        }
-
-        // ============================================================
-        // CONVERT CSV ROWS TO NORMALIZED DATA OBJECTS
+        // CONVERT SHEET ROWS TO NORMALIZED DATA OBJECTS
         // ============================================================
         function csvToNormalizedData(rows) {
             if (!rows || rows.length < 2) throw new Error('Sheet appears empty');
@@ -3297,14 +3191,29 @@
         }
 
         // ============================================================
-        // FETCH FILE 1 FROM GOOGLE SHEETS
-        // Strategy 1: Published CSV export (cleanest)
-        // Strategy 2: JSONP via gviz endpoint (fallback)
+        // FETCH FILE 1 FROM GOOGLE SHEETS — authenticated read only
+        // The sheet is private. Reads go through the Sheets API using the
+        // signed-in user's token (same auth as write-back). There is no
+        // public / published-to-web access path.
         // ============================================================
         async function fetchFromDrive() {
             const fetchBtn = document.getElementById('fetchBtn');
             const fetchError = document.getElementById('fetchError');
             const fileName = document.getElementById('file1-name');
+
+            // Require sign-in — without a token there is no way to read the sheet
+            if (!isGoogleAuthed()) {
+                fetchBtn.classList.remove('loading');
+                fetchBtn.innerHTML = `
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" />
+                    </svg>
+                    Fetch from Drive
+                `;
+                fetchError.textContent = 'Sign in with Google to load the transactions sheet.';
+                fetchError.classList.add('show');
+                return;
+            }
 
             fetchBtn.classList.add('loading');
             fetchBtn.innerHTML = `
@@ -3315,107 +3224,26 @@
             `;
             fetchError.classList.remove('show');
 
-            // Try Strategy 1: Published CSV export
             try {
-                const csvUrl = `https://docs.google.com/spreadsheets/d/e/${FILE1_PUB_KEY}/pub?output=csv&cachebust=${Date.now()}`;
-                const response = await fetch(csvUrl);
-
-                if (response.ok) {
-                    const csvText = await response.text();
-                    if (csvText && csvText.length > 50 && !csvText.includes('<!DOCTYPE')) {
-                        const rows = parseCSV(csvText);
-                        const normalizedData = csvToNormalizedData(rows);
-                        onFetchSuccess(normalizedData, fetchBtn, fileName);
-                        return;
-                    }
-                }
+                const rows = await sheetsGet(SHEET_NAME);
+                const normalizedData = csvToNormalizedData(rows);
+                onFetchSuccess(normalizedData, fetchBtn, fileName);
             } catch (e) {
-                // silently fall through to JSONP
-            }
-
-            // Try Strategy 2: JSONP via gviz
-            try {
-                const data = await fetchViaJSONP();
-                onFetchSuccess(data, fetchBtn, fileName);
-            } catch (e) {
-                const isTimeout = e.message === 'JSONP timed out';
-                fetchError.textContent = isTimeout
-                    ? 'Could not reach Google Sheets — check your internet connection and that the sheet is published to web (File → Share → Publish to web).'
-                    : 'Could not load sheet. Make sure it is published to web: File → Share → Publish to web → select the sheet → Publish.';
+                const msg = e.message;
+                fetchError.textContent =
+                    msg === 'SESSION_EXPIRED' ? 'Session expired — please sign in again.' :
+                    msg === 'NO_ACCESS' ? 'Access denied — sign in with an account that has access to the sheet.' :
+                    'Could not load the sheet. Check your connection and that you have access.';
                 fetchError.classList.add('show');
+                fetchBtn.classList.remove('loading');
                 fetchBtn.innerHTML = `
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
                     </svg>
                     Retry Fetch
                 `;
-                fetchBtn.classList.remove('loading');
+                if (msg === 'SESSION_EXPIRED') setTimeout(handleGoogleSignIn, 1000);
             }
-        }
-
-        function fetchViaJSONP() {
-            return new Promise((resolve, reject) => {
-                const callbackName = '_sheetCB_' + Date.now();
-
-                const timeout = setTimeout(() => {
-                    cleanup();
-                    reject(new Error('JSONP timed out'));
-                }, 15000);
-
-                function cleanup() {
-                    clearTimeout(timeout);
-                    delete window[callbackName];
-                    const s = document.getElementById('sheetScript');
-                    if (s) s.remove();
-                }
-
-                window[callbackName] = function(response) {
-                    cleanup();
-                    try {
-                        if (response.status !== 'ok') {
-                            throw new Error(response.errors?.[0]?.message || 'Sheet error');
-                        }
-                        const table = response.table;
-                        const headers = table.cols.map(c => c.label || '');
-                        let useFirstRow = headers.every(h => h === '');
-                        let finalHeaders, dataRows;
-
-                        if (useFirstRow && table.rows.length > 0) {
-                            finalHeaders = table.rows[0].c.map(cell => cell ? String(cell.v || '') : '');
-                            dataRows = table.rows.slice(1);
-                        } else {
-                            finalHeaders = headers;
-                            dataRows = table.rows;
-                        }
-
-                        const normalizedData = dataRows.map(row => {
-                            const obj = {};
-                            finalHeaders.forEach((col, idx) => {
-                                const cell = row.c ? row.c[idx] : null;
-                                let val = cell ? cell.v : null;
-                                if (col) {
-                                    if (typeof val === 'string' && val.startsWith('Date(')) {
-                                        const m = val.match(/Date\((\d+),(\d+),(\d+)\)/);
-                                        if (m) val = new Date(parseInt(m[1]), parseInt(m[2]), parseInt(m[3]));
-                                    }
-                                    obj[col] = val;
-                                }
-                            });
-                            return obj;
-                        }).filter(row => Object.values(row).some(v => v !== null && v !== undefined));
-
-                        resolve(normalizedData);
-                    } catch (e) {
-                        reject(e);
-                    }
-                };
-
-                const script = document.createElement('script');
-                script.id = 'sheetScript';
-                script.onerror = () => { cleanup(); reject(new Error('Script load failed')); };
-                script.src = `https://docs.google.com/spreadsheets/d/${FILE1_SHEET_ID}/gviz/tq?tqx=responseHandler:${callbackName}`;
-                document.head.appendChild(script);
-            });
         }
 
         function onFetchSuccess(normalizedData, fetchBtn, fileName) {
