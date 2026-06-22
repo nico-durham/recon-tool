@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Durham Autohaus - Transaction Reconciliation</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" integrity="sha384-vtjasyidUo0kW94K5MXDXntzOJpQgBKXmE7e2Ga4LG0skTTLeBi97eFAXsqewJjw" crossorigin="anonymous" defer></script>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
@@ -585,6 +585,20 @@
 
         .btn-recon-confirm:hover { opacity: 0.85; }
         .btn-recon-confirm:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .missed-action-wrap {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            min-width: 230px;
+        }
+
+        .missed-action-or {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            text-align: center;
+            letter-spacing: 0.02em;
+        }
 
         .btn-recon-cancel {
             padding: 5px 10px;
@@ -1739,6 +1753,8 @@
         }
 
         .link-select:focus { outline: none; border-color: var(--accent); }
+        input.link-select { cursor: text; }
+        .link-select::placeholder { color: var(--text-secondary); }
 
         .btn-link-confirm {
             display: inline-flex;
@@ -2143,6 +2159,7 @@
                             <tr>
                                 <th>Date</th>
                                 <th>Customer</th>
+                                <th>Staff</th>
                                 <th>Type</th>
                                 <th>Logged</th>
                                 <th>Expected Payout</th>
@@ -2247,6 +2264,7 @@
                                 <tr>
                                     <th onclick="sortUnified('serviceDate')">Date <span class="sort-icon">↕</span></th>
                                     <th onclick="sortUnified('customerCode')">Customer <span class="sort-icon">↕</span></th>
+                                    <th>Staff</th>
                                     <th>
                                         <span class="svc-header-wrap" id="svcHeaderWrap" onclick="toggleServiceFilter(event)">
                                             Services <span class="svc-filter-icon">▼</span><span class="svc-active-count" id="svcActiveCount" style="display:none;">0</span>
@@ -2290,13 +2308,15 @@
                                 <tr>
                                     <th>Date</th>
                                     <th>Customer</th>
+                                    <th>Staff</th>
                                     <th>Type</th>
                                     <th>Logged</th>
                                     <th>SSC Payout</th>
                                     <th>Expected</th>
                                     <th>Difference</th>
                                     <th>Status</th>
-                                    <th style="width: 140px;">Action</th>
+                                    <th style="width: 70px; text-align: center;">Proof</th>
+                                    <th style="width: 230px;">Action</th>
                                 </tr>
                             </thead>
                             <tbody id="missedBody"></tbody>
@@ -2317,6 +2337,7 @@
                                 <tr>
                                     <th>Date</th>
                                     <th>Customer</th>
+                                    <th>Staff</th>
                                     <th>Services</th>
                                     <th>Owed (Record)</th>
                                     <th style="width: 70px; text-align: center;">Proof</th>
@@ -2340,6 +2361,7 @@
                                 <tr>
                                     <th>Date</th>
                                     <th>Customer</th>
+                                    <th>Staff</th>
                                     <th>Services</th>
                                     <th>SSC Payment</th>
                                     <th>SSC Payout</th>
@@ -2689,7 +2711,7 @@
                     (transactionId && r.transactionId && String(r.transactionId) === String(transactionId)) ||
                     (r.customerCode === customerCode && formatDate(r.serviceDate) === serviceDateStr)
                 );
-                if (missedRow) missedRow.reconciled = true;
+                if (missedRow) { missedRow.reconciled = true; if (note) missedRow.reconNote = note; }
 
                 const mainRow = reconciliationResults.details.find(r =>
                     (transactionId && r.transactionId && String(r.transactionId) === String(transactionId)) ||
@@ -3602,6 +3624,13 @@
             const linkedTxCol = findColumnByPattern(data, /linked.*transaction/i);
             // Find "Notes" column — reconciliation notes added by staff
             const noteCol = findColumnByPattern(data, /^notes?$/i) || findColumnByPattern(data, /reconciliation.*note/i);
+            // Find "Logged By" / staff column — who logged the transaction in the record
+            const loggedByCol = findColumnByPattern(data, /^transaction\s+logged\s+by$/i)
+                || findColumnByPattern(data, /logged\s*by/i)
+                || findColumnByPattern(data, /^staff/i)
+                || findColumnByPattern(data, /submitted\s*by/i)
+                || findColumnByPattern(data, /created\s*by/i)
+                || findColumnByPattern(data, /^(user|rep|technician|employee)$/i);
 
             for (let idx = 0; idx < data.length; idx++) {
                 const row = data[idx];
@@ -3619,6 +3648,7 @@
                 const transactionId = txIdCol ? (row[txIdCol] || null) : null;
                 const linkedTransactionId = linkedTxCol ? (row[linkedTxCol] || null) : null;
                 const reconNote = noteCol ? (row[noteCol] || null) : null;
+                const loggedBy = loggedByCol ? (row[loggedByCol] || null) : null;
                 const sheetRow = idx + 2; // +1 for 0-index, +1 for header row
 
                 if (entries[key]) {
@@ -3627,6 +3657,7 @@
                     if (transactionId && !entries[key].transactionId) entries[key].transactionId = transactionId;
                     if (linkedTransactionId && !entries[key].linkedTransactionId) entries[key].linkedTransactionId = linkedTransactionId;
                     if (reconNote && !entries[key].reconNote) entries[key].reconNote = reconNote;
+                    if (loggedBy && !entries[key].loggedBy) entries[key].loggedBy = loggedBy;
                     if (!isReconciled) entries[key].reconciled = false;
                 } else {
                     entries[key] = {
@@ -3638,6 +3669,7 @@
                         transactionId: transactionId,
                         linkedTransactionId: linkedTransactionId,
                         reconNote: reconNote,
+                        loggedBy: loggedBy,
                         reconciled: isReconciled,
                         sourceRow: sheetRow
                     };
@@ -3913,7 +3945,10 @@
                         missedResults.push({
                             serviceDate: f1 ? f1.date : f2.date,
                             customerCode: f1 ? f1.customer : f2.customer,
+                            loggedBy: f1 ? (f1.loggedBy || null) : null,
                             transactionId: f1 ? (f1.transactionId || null) : null,
+                            proofUrl: f1 ? (f1.proofUrl || null) : null,
+                            sourceRow: f1 ? (f1.sourceRow || null) : null,
                             servicesDisplay: formatServices(servicesList) || (f1 ? formatServicesRaw(f1.service) : '-'),
                             sscPayout: f2.payout,
                             expectedPayout,
@@ -3953,7 +3988,10 @@
                         missedResults.push({
                             serviceDate: entry.date,
                             customerCode: entry.customer,
+                            loggedBy: entry.loggedBy || null,
                             transactionId: entry.transactionId || null,
+                            proofUrl: entry.proofUrl || null,
+                            sourceRow: entry.sourceRow || null,
                             servicesDisplay: formatServicesRaw(entry.service) || 'Missed',
                             sscPayout: undefined,
                             expectedPayout,
@@ -3984,6 +4022,9 @@
                         missedResults.push({
                             serviceDate: entry.date,
                             customerCode: entry.customer,
+                            loggedBy: null,
+                            proofUrl: null,
+                            sourceRow: null,
                             servicesDisplay: formatServices(servicesList),
                             sscPayout: entry.payout,
                             expectedPayout,
@@ -4118,6 +4159,7 @@
                             proofUrl: entry.proofUrl || null,
                             transactionId: entry.transactionId || null,
                             reconciled: entry.reconciled || false,
+                            loggedBy: entry.loggedBy || null,
                             sourceRow: entry.sourceRow || null
                         });
                         notFoundInF2++;
@@ -4164,7 +4206,8 @@
                             expectedPayout,
                             payoutDiff,
                             payoutStatus,
-                            proofUrl: null
+                            proofUrl: null,
+                            loggedBy: null
                         });
                         notFoundInF1++;
                     }
@@ -4228,6 +4271,7 @@
                             transactionId: f1.transactionId || null,
                             reconciled: f1.reconciled || false,
                             reconNote: f1.reconNote || null,
+                            loggedBy: f1.loggedBy || null,
                             isClawback: f2.isClawback || false,
                             clawbackAmt: f2.clawbackAmt || 0,
                             sourceRow: f1.sourceRow || null
@@ -4451,11 +4495,31 @@
         }
 
         // ============================================================
+        // OUTPUT SANITIZERS — escape sheet values before injecting into HTML
+        // ============================================================
+        function escapeHtml(v) {
+            if (v === null || v === undefined) return '';
+            return String(v)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+        // Block dangerous URL schemes (javascript:, data:, vbscript:); HTML-escape the rest
+        function safeUrl(u) {
+            const s = String(u == null ? '' : u).trim();
+            if (!s || /^(javascript|data|vbscript):/i.test(s)) return '';
+            return s;
+        }
+
+        // ============================================================
         // PROOF OF PAYMENT ICON
         // ============================================================
         function proofIconHTML(url) {
-            if (!url) return '<span class="proof-none">—</span>';
-            return `<a href="${url}" target="_blank" rel="noopener" class="proof-icon" title="View proof of payment">
+            const safe = safeUrl(url);
+            if (!safe) return '<span class="proof-none">—</span>';
+            return `<a href="${escapeHtml(safe)}" target="_blank" rel="noopener" class="proof-icon" title="View proof of payment">
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M3.75 21h16.5A2.25 2.25 0 0022.5 18.75V5.25A2.25 2.25 0 0020.25 3H3.75A2.25 2.25 0 001.5 5.25v13.5A2.25 2.25 0 003.75 21z" />
                 </svg>
@@ -4517,6 +4581,11 @@
             }
         }
 
+        // Staff (logged-by) cell — shows '—' when there's no record-side entry
+        function staffCell(row) {
+            return (row.loggedBy != null && row.loggedBy !== '') ? escapeHtml(row.loggedBy) : '—';
+        }
+
         // ============================================================
         // RENDER UNIFIED TABLE (2 rows per visit)
         // ============================================================
@@ -4562,7 +4631,7 @@
                 const dateStr = formatDate(row.serviceDate);
                 let actionCell;
                 if (row.reconciled) {
-                    const note = row.reconNote ? `<div class="reconciled-note" title="${row.reconNote}">📝 ${row.reconNote}</div>` : '';
+                    const note = row.reconNote ? `<div class="reconciled-note" title="${escapeHtml(row.reconNote)}">📝 ${escapeHtml(row.reconNote)}</div>` : '';
                     actionCell = `<div><span class="reconciled-row-badge">✓ Reconciled</span>${note}</div>`;
                 } else if (isMismatch) {
                     const authed = isGoogleAuthed();
@@ -4586,6 +4655,7 @@
                     tr1.innerHTML = `
                         <td rowspan="2" class="date-cell">${formatDate(row.serviceDate)}${warningsHTML}</td>
                         <td rowspan="2"><span class="cust-cell"><span>${row.customerCode}</span>${copyCodeButtonHTML(row.customerCode)}</span></td>
+                        <td rowspan="2">${staffCell(row)}</td>
                         <td rowspan="2">${row.servicesDisplay}</td>
                         <td><span class="type-label type-payment">Client Paid</span></td>
                         <td>${row.owedFile1 !== undefined ? '$' + row.owedFile1.toFixed(2) : '-'}</td>
@@ -4627,6 +4697,7 @@
                     tr.innerHTML = `
                         <td class="date-cell">${formatDate(row.serviceDate)}${warningsHTML}</td>
                         <td><span class="cust-cell"><span>${row.customerCode}</span>${copyCodeButtonHTML(row.customerCode)}</span></td>
+                        <td>${staffCell(row)}</td>
                         <td>${row.servicesDisplay}</td>
                         <td><span class="type-label type-payment">Client Paid</span></td>
                         <td>${row.owedFile1 !== undefined ? '$' + row.owedFile1.toFixed(2) : '-'}</td>
@@ -4652,8 +4723,24 @@
 
             } catch (e) {
                 console.error('renderUnifiedTable error:', e);
-                tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--danger);">Error rendering table. Please try refreshing.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;padding:24px;color:var(--danger);">Error rendering table. Please try refreshing.</td></tr>';
             }
+        }
+
+        // ============================================================
+        // SEARCHABLE TRANSACTION PICKER — native <datalist>-backed input.
+        // Returns a search box + datalist; the input's value resolves to the
+        // chosen Transaction ID, so linkMissedTransaction works unchanged.
+        // Searchable by #, customer, date, or service (Chrome/Edge match all).
+        // ============================================================
+        let _linkDlSeq = 0;
+        function linkSearchHTML(txOptionsList, ownTxId) {
+            const dlId = 'linkdl-' + (_linkDlSeq++);
+            const opts = (txOptionsList || [])
+                .filter(o => o.txId !== ownTxId)
+                .map(o => `<option value="${escapeHtml(o.txId)}">${escapeHtml(o.label)}</option>`)
+                .join('');
+            return `<input class="link-select" type="text" list="${dlId}" placeholder="Search # / customer / date…" autocomplete="off"><datalist id="${dlId}">${opts}</datalist>`;
         }
 
         // ============================================================
@@ -4691,11 +4778,6 @@
                     const authed = isGoogleAuthed();
                     const dateStr = formatDate(row.serviceDate);
                     const ownTxId = row.transactionId ? String(row.transactionId) : null;
-                    const rowOptionsHTML = `<option value="">Select transaction...</option>` +
-                        criticalTxOptions
-                            .filter(o => o.txId !== ownTxId)
-                            .map(o => `<option value="${o.txId}">${o.label}</option>`)
-                            .join('');
 
                     let actionCell;
                     if (row.reconciled) {
@@ -4703,7 +4785,7 @@
                         actionCell = `<span class="reconciled-row-badge">✓ Reconciled${linked}</span>`;
                     } else if (authed) {
                         actionCell = `<div class="link-dropdown-wrap">
-                            <select class="link-select">${rowOptionsHTML}</select>
+                            ${linkSearchHTML(criticalTxOptions, ownTxId)}
                             <button class="btn-link-confirm">Link & Reconcile</button>
                         </div>`;
                     } else {
@@ -4719,6 +4801,7 @@
                     tr.innerHTML = `
                         <td>${dateStr}</td>
                         <td>${row.customerCode}</td>
+                        <td>${staffCell(row)}</td>
                         <td>${row.servicesDisplay}</td>
                         <td>${loggedCell}</td>
                         <td style="color: var(--error); font-weight: 600;">$${(row.expectedPayout || 0).toFixed(2)}</td>
@@ -4775,9 +4858,6 @@
                     .filter((v, i, arr) => arr.findIndex(x => x.txId === v.txId) === i) // dedupe
                     .sort((a, b) => a.txId.localeCompare(b.txId));
 
-                const optionsHTML = `<option value="">Select transaction...</option>` +
-                    txOptions.map(o => `<option value="${o.txId}">${o.label}</option>`).join('');
-
                 for (const row of missedRows) {
                     // Status badge
                     let missedBadge;
@@ -4794,24 +4874,35 @@
                     const dateStr = formatDate(row.serviceDate);
                     const ownTxId = row.transactionId ? String(row.transactionId) : null;
 
-                    // Build options excluding this row's own transaction ID
-                    const rowOptionsHTML = `<option value="">Select transaction...</option>` +
-                        txOptions
-                            .filter(o => o.txId !== ownTxId)
-                            .map(o => `<option value="${o.txId}">${o.label}</option>`)
-                            .join('');
-
                     // Action cell
                     let actionCell;
                     if (row.reconciled) {
                         const linked = row.linkedTxId ? ` #${row.linkedTxId}` : '';
-                        actionCell = `<span class="reconciled-row-badge">✓ Reconciled${linked}</span>`;
-                    } else if (row.missedStatus === 'SSC_ONLY' || row.missedStatus === 'CRITICAL') {
-                        const linkLabel = row.missedStatus === 'CRITICAL' ? 'Link & Reconcile' : 'Link';
+                        const noteHtml = row.reconNote ? `<div class="reconciled-note" title="${escapeHtml(row.reconNote)}">📝 ${escapeHtml(row.reconNote)}</div>` : '';
+                        actionCell = `<div><span class="reconciled-row-badge">✓ Reconciled${linked}</span>${noteHtml}</div>`;
+                    } else if (row.missedStatus === 'CRITICAL') {
+                        if (authed) {
+                            actionCell = `<div class="missed-action-wrap">
+                                <div class="link-dropdown-wrap">
+                                    ${linkSearchHTML(txOptions, ownTxId)}
+                                    <button class="btn-link-confirm">Link &amp; Reconcile</button>
+                                </div>
+                                <div class="missed-action-or">— or, if arranged off-report —</div>
+                                <div class="recon-comment-wrap">
+                                    <textarea placeholder="Note (e.g. paid directly, not on SSC report…)" rows="2"></textarea>
+                                    <div class="recon-comment-actions">
+                                        <button class="btn-recon-confirm">✓ Mark Reconciled</button>
+                                    </div>
+                                </div>
+                            </div>`;
+                        } else {
+                            actionCell = `<button class="btn-reconcile" disabled title="Sign in with Google to enable this">Link Record</button>`;
+                        }
+                    } else if (row.missedStatus === 'SSC_ONLY') {
                         if (authed) {
                             actionCell = `<div class="link-dropdown-wrap">
-                                <select class="link-select">${rowOptionsHTML}</select>
-                                <button class="btn-link-confirm">${linkLabel}</button>
+                                ${linkSearchHTML(txOptions, ownTxId)}
+                                <button class="btn-link-confirm">Link</button>
                             </div>`;
                         } else {
                             actionCell = `<button class="btn-reconcile" disabled title="Sign in with Google to enable this">Link Record</button>`;
@@ -4837,12 +4928,14 @@
                     tr.innerHTML = `
                         <td>${dateStr}</td>
                         <td>${row.customerCode}</td>
+                        <td>${staffCell(row)}</td>
                         <td>${row.servicesDisplay}</td>
                         <td>${loggedCell}</td>
                         <td>${row.sscPayout !== undefined ? '$' + row.sscPayout.toFixed(2) : '-'}</td>
                         <td>$${(row.expectedPayout || 0).toFixed(2)}</td>
                         <td class="${row.payoutDiff > 0 ? 'diff-positive' : row.payoutDiff < 0 ? 'diff-negative' : ''}">${row.payoutDiff !== null ? '$' + row.payoutDiff.toFixed(2) : '-'}</td>
                         <td>${missedBadge}</td>
+                        <td style="text-align: center;">${proofIconHTML(row.proofUrl)} ${editSheetHTML(row.sourceRow)}</td>
                         <td>${actionCell}</td>
                     `;
 
@@ -4863,6 +4956,15 @@
                             const d = this.dataset.date;
                             const t = this.dataset.txid || null;
                             markAsReconciled(this, c, d, t);
+                        });
+                    }
+                    const confirmBtn = tr.querySelector('.btn-recon-confirm');
+                    if (confirmBtn) {
+                        const custCode = row.customerCode;
+                        const txId = row.transactionId || null;
+                        confirmBtn.addEventListener('click', function() {
+                            const note = this.closest('.recon-comment-wrap').querySelector('textarea').value.trim();
+                            markAsReconciled(this, custCode, dateStr, txId, note);
                         });
                     }
 
@@ -4887,6 +4989,7 @@
                     tr.innerHTML = `
                         <td>${formatDate(row.serviceDate)}</td>
                         <td>${row.customerCode}</td>
+                        <td>${staffCell(row)}</td>
                         <td>${row.servicesDisplay}</td>
                         <td>${row.owedFile1 !== undefined ? '$' + row.owedFile1.toFixed(2) : '-'}</td>
                         <td style="text-align: center;">${proofIconHTML(row.proofUrl)} ${editSheetHTML(row.sourceRow)}</td>
@@ -4912,6 +5015,7 @@
                     tr.innerHTML = `
                         <td>${formatDate(row.serviceDate)}</td>
                         <td>${row.customerCode}</td>
+                        <td>${staffCell(row)}</td>
                         <td>${row.servicesDisplay}</td>
                         <td>${row.owedFile2 !== undefined ? '$' + row.owedFile2.toFixed(2) : '-'}</td>
                         <td>${row.sscPayout !== undefined ? '$' + row.sscPayout.toFixed(2) : '-'}</td>
@@ -5371,7 +5475,7 @@
                         // Proof of payment — show a button instead of raw URL
                         const url = String(val).trim();
                         if (url && url.startsWith('http')) {
-                            td.innerHTML = `<a href="${url}" target="_blank" rel="noopener" class="proof-icon" title="View proof of payment">
+                            td.innerHTML = `<a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="proof-icon" title="View proof of payment">
                                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
                                 </svg>
@@ -5451,6 +5555,13 @@
         async function linkMissedTransaction(selectEl, confirmBtn, customerCode, serviceDateStr, transactionId) {
             const selectedTxId = selectEl.value;
             if (!selectedTxId) return;
+
+            // Only allow a value that exists in the picker's datalist (guards typos)
+            const dl = selectEl.list;
+            if (dl && !Array.from(dl.options).some(o => o.value === selectedTxId)) {
+                showToast('Pick a transaction from the list', 'error');
+                return;
+            }
 
             if (!isGoogleAuthed()) {
                 showToast('Sign in with Google first to enable write-back', 'error');
