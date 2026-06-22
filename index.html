@@ -4784,9 +4784,18 @@
                         const linked = row.linkedTxId ? ` #${row.linkedTxId}` : '';
                         actionCell = `<span class="reconciled-row-badge">✓ Reconciled${linked}</span>`;
                     } else if (authed) {
-                        actionCell = `<div class="link-dropdown-wrap">
-                            ${linkSearchHTML(criticalTxOptions, ownTxId)}
-                            <button class="btn-link-confirm">Link & Reconcile</button>
+                        actionCell = `<div class="missed-action-wrap">
+                            <div class="link-dropdown-wrap">
+                                ${linkSearchHTML(criticalTxOptions, ownTxId)}
+                                <button class="btn-link-confirm">Link &amp; Reconcile</button>
+                            </div>
+                            <div class="missed-action-or">— or, if arranged off-report —</div>
+                            <div class="recon-comment-wrap">
+                                <textarea placeholder="Note (e.g. paid directly, not on SSC report…)" rows="2"></textarea>
+                                <div class="recon-comment-actions">
+                                    <button class="btn-recon-confirm">✓ Mark Reconciled</button>
+                                </div>
+                            </div>
                         </div>`;
                     } else {
                         actionCell = `<button class="btn-reconcile" disabled title="Sign in with Google to enable this">Link Record</button>`;
@@ -4815,6 +4824,15 @@
                         linkBtn.addEventListener('click', function() {
                             const sel = this.closest('.link-dropdown-wrap').querySelector('.link-select');
                             linkMissedTransaction(sel, this, custCode, dateStr, txId);
+                        });
+                    }
+                    const confirmBtn = tr.querySelector('.btn-recon-confirm');
+                    if (confirmBtn) {
+                        const custCode = row.customerCode;
+                        const txId = row.transactionId || null;
+                        confirmBtn.addEventListener('click', function() {
+                            const note = this.closest('.recon-comment-wrap').querySelector('textarea').value.trim();
+                            markAsReconciled(this, custCode, dateStr, txId, note);
                         });
                     }
                     criticalBody.appendChild(tr);
