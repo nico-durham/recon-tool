@@ -2335,19 +2335,19 @@
                         <table id="reconTable">
                             <thead>
                                 <tr>
-                                    <th onclick="sortUnified('serviceDate')">Date <span class="sort-icon">↕</span></th>
-                                    <th onclick="sortUnified('customerCode')">Customer <span class="sort-icon">↕</span></th>
-                                    <th>Staff</th>
+                                    <th onclick="sortUnified('serviceDate', this)">Date <span class="sort-icon">↕</span></th>
+                                    <th onclick="sortUnified('customerCode', this)">Customer <span class="sort-icon">↕</span></th>
+                                    <th onclick="sortUnified('loggedBy', this)">Staff <span class="sort-icon">↕</span></th>
                                     <th>
                                         <span class="svc-header-wrap" id="svcHeaderWrap" onclick="toggleServiceFilter(event)">
                                             Services <span class="svc-filter-icon">▼</span><span class="svc-active-count" id="svcActiveCount" style="display:none;">0</span>
                                         </span>
                                     </th>
                                     <th>Check</th>
-                                    <th>Ours</th>
-                                    <th>SSC</th>
-                                    <th>Difference</th>
-                                    <th>Status</th>
+                                    <th onclick="sortUnified('owedFile1', this)">Ours <span class="sort-icon">↕</span></th>
+                                    <th onclick="sortUnified('owedFile2', this)">SSC <span class="sort-icon">↕</span></th>
+                                    <th onclick="sortUnified('paymentDiff', this)">Difference <span class="sort-icon">↕</span></th>
+                                    <th onclick="sortUnified('paymentStatus', this)">Status <span class="sort-icon">↕</span></th>
                                     <th style="width: 70px; text-align: center;">Proof</th>
                                     <th style="width: 130px;">Action</th>
                                 </tr>
@@ -4646,7 +4646,7 @@
         // ============================================================
         let currentSort = { column: null, direction: 'asc' };
 
-        function sortUnified(column) {
+        function sortUnified(column, thEl) {
             if (currentSort.column === column) {
                 currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
             } else {
@@ -4668,20 +4668,24 @@
 
                 let result = 0;
                 if (typeof valA === 'string' && typeof valB === 'string') {
-                    result = valA.localeCompare(valB);
+                    result = valA.localeCompare(valB, undefined, { numeric: true });
                 } else {
                     result = valA < valB ? -1 : valA > valB ? 1 : 0;
                 }
                 return currentSort.direction === 'asc' ? result : -result;
             });
 
-            // Update header icons
-            const table = document.getElementById('reconTable');
-            table.querySelectorAll('th').forEach(th => {
-                th.classList.remove('sorted');
-                const icon = th.querySelector('.sort-icon');
-                if (icon) icon.textContent = '↕';
-            });
+            // Update header icons: highlight the active column with ↑/↓, reset the rest to ↕
+            if (thEl) {
+                setSortIcons(thEl, currentSort.direction);
+            } else {
+                const table = document.getElementById('reconTable');
+                if (table) table.querySelectorAll('th').forEach(th => {
+                    th.classList.remove('sorted');
+                    const icon = th.querySelector('.sort-icon');
+                    if (icon) icon.textContent = '↕';
+                });
+            }
 
             renderUnifiedTable();
         }
