@@ -2408,11 +2408,11 @@
                         <table>
                             <thead>
                                 <tr>
-                                    <th>Date</th>
-                                    <th>Customer</th>
-                                    <th>Staff</th>
-                                    <th>Services</th>
-                                    <th>Owed (Record)</th>
+                                    <th onclick="sortNotInSSC('date', this)">Date <span class="sort-icon">↕</span></th>
+                                    <th onclick="sortNotInSSC('customer', this)">Customer <span class="sort-icon">↕</span></th>
+                                    <th onclick="sortNotInSSC('staff', this)">Staff <span class="sort-icon">↕</span></th>
+                                    <th onclick="sortNotInSSC('services', this)">Services <span class="sort-icon">↕</span></th>
+                                    <th onclick="sortNotInSSC('owedFile1', this)">Owed (Record) <span class="sort-icon">↕</span></th>
                                     <th style="width: 70px; text-align: center;">Proof</th>
                                 </tr>
                             </thead>
@@ -2432,12 +2432,12 @@
                         <table>
                             <thead>
                                 <tr>
-                                    <th>Date</th>
-                                    <th>Customer</th>
-                                    <th>Staff</th>
-                                    <th>Services</th>
-                                    <th>SSC Payment</th>
-                                    <th>SSC Payout</th>
+                                    <th onclick="sortNotInRecord('date', this)">Date <span class="sort-icon">↕</span></th>
+                                    <th onclick="sortNotInRecord('customer', this)">Customer <span class="sort-icon">↕</span></th>
+                                    <th onclick="sortNotInRecord('staff', this)">Staff <span class="sort-icon">↕</span></th>
+                                    <th onclick="sortNotInRecord('services', this)">Services <span class="sort-icon">↕</span></th>
+                                    <th onclick="sortNotInRecord('owedFile2', this)">SSC Payment <span class="sort-icon">↕</span></th>
+                                    <th onclick="sortNotInRecord('sscPayout', this)">SSC Payout <span class="sort-icon">↕</span></th>
                                 </tr>
                             </thead>
                             <tbody id="notInRecordBody"></tbody>
@@ -4769,6 +4769,55 @@
             renderOrphanCards();
         }
 
+        // ---- Orphan tables (Not in SSC Payroll / Not in Your Records) ----
+        let notInSSCSort = { column: null, direction: 'asc' };
+        let notInRecordSort = { column: null, direction: 'asc' };
+        const ORPHAN_NUMERIC_COLS = new Set(['date', 'customer', 'owedFile1', 'owedFile2', 'sscPayout']);
+
+        function orphanSortVal(row, column) {
+            switch (column) {
+                case 'date':      return row.serviceDate ? row.serviceDate.getTime() : -Infinity;
+                case 'customer':  return Number(row.customerCode) || 0;
+                case 'staff':     return (row.loggedBy || '').toString().toLowerCase();
+                case 'services':  return (row.servicesDisplay || '').toString().toLowerCase();
+                case 'owedFile1': return row.owedFile1;
+                case 'owedFile2': return row.owedFile2;
+                case 'sscPayout': return row.sscPayout;
+                default:          return '';
+            }
+        }
+
+        function applyOrphanSort(rows, state) {
+            if (!state.column) return rows;
+            return rows.slice().sort((a, b) => {
+                let va = orphanSortVal(a, state.column);
+                let vb = orphanSortVal(b, state.column);
+                let result;
+                if (ORPHAN_NUMERIC_COLS.has(state.column)) {
+                    va = (va === null || va === undefined) ? -Infinity : Number(va);
+                    vb = (vb === null || vb === undefined) ? -Infinity : Number(vb);
+                    result = va < vb ? -1 : va > vb ? 1 : 0;
+                } else {
+                    result = String(va).localeCompare(String(vb), undefined, { numeric: true });
+                }
+                return state.direction === 'asc' ? result : -result;
+            });
+        }
+
+        function sortNotInSSC(column, thEl) {
+            if (notInSSCSort.column === column) notInSSCSort.direction = notInSSCSort.direction === 'asc' ? 'desc' : 'asc';
+            else { notInSSCSort.column = column; notInSSCSort.direction = 'asc'; }
+            setSortIcons(thEl, notInSSCSort.direction);
+            renderOrphanCards();
+        }
+
+        function sortNotInRecord(column, thEl) {
+            if (notInRecordSort.column === column) notInRecordSort.direction = notInRecordSort.direction === 'asc' ? 'desc' : 'asc';
+            else { notInRecordSort.column = column; notInRecordSort.direction = 'asc'; }
+            setSortIcons(thEl, notInRecordSort.direction);
+            renderOrphanCards();
+        }
+
         // ============================================================
         // WARNING DETECTION
         // ============================================================
@@ -5381,7 +5430,7 @@
                 card1.style.display = 'block';
                 document.getElementById('countNotInSSC').textContent = notInSSC.length;
 
-                for (const row of notInSSC) {
+                for (const row of applyOrphanSort(notInSSC, notInSSCSort)) {
                     const tr = document.createElement('tr');
                     tr.innerHTML = `
                         <td>${formatDate(row.serviceDate)}</td>
@@ -5407,7 +5456,7 @@
                 card2.style.display = 'block';
                 document.getElementById('countNotInRecord').textContent = notInRecord.length;
 
-                for (const row of notInRecord) {
+                for (const row of applyOrphanSort(notInRecord, notInRecordSort)) {
                     const tr = document.createElement('tr');
                     tr.innerHTML = `
                         <td>${formatDate(row.serviceDate)}</td>
