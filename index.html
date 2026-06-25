@@ -1083,6 +1083,72 @@
             transform: scale(1.1);
         }
 
+        .open-sheet-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: #60a5fa;
+            background: rgba(59,130,246,0.12);
+            padding: 4px 9px;
+            border-radius: 6px;
+            text-decoration: none;
+            margin-bottom: 8px;
+            transition: all 0.15s;
+        }
+
+        .open-sheet-link:hover {
+            background: rgba(59,130,246,0.25);
+            color: #93bbfd;
+        }
+
+        .critical-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 0 4px 12px;
+        }
+
+        .critical-toolbar-label {
+            color: var(--text-secondary);
+            font-weight: 600;
+            font-size: 0.78rem;
+        }
+
+        .scope-toggle {
+            display: inline-flex;
+            border: 1px solid rgba(255,255,255,0.14);
+            border-radius: 7px;
+            overflow: hidden;
+        }
+
+        .scope-opt {
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            font-size: 0.76rem;
+            font-weight: 600;
+            padding: 5px 13px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .scope-opt:hover:not(:disabled):not(.active) {
+            background: rgba(255,255,255,0.06);
+            color: #e0e0e0;
+        }
+
+        .scope-opt.active {
+            background: var(--accent);
+            color: #fff;
+        }
+
+        .scope-opt:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
         .cust-cell {
             display: inline-flex;
             align-items: center;
@@ -2153,16 +2219,23 @@
                     </div>
                     <span class="critical-count" id="criticalCount">0</span>
                 </div>
+                <div class="critical-toolbar">
+                    <span class="critical-toolbar-label">Showing:</span>
+                    <div class="scope-toggle">
+                        <button class="scope-opt active" id="critScopeAll" onclick="setCriticalScope('all')">All dates</button>
+                        <button class="scope-opt" id="critScopeRange" onclick="setCriticalScope('range')">Selected range</button>
+                    </div>
+                </div>
                 <div class="critical-table-wrap">
                     <table>
                         <thead>
                             <tr>
-                                <th>Date</th>
-                                <th>Customer</th>
-                                <th>Staff</th>
-                                <th>Type</th>
-                                <th>Logged</th>
-                                <th>Expected Payout</th>
+                                <th onclick="sortCritical('date', this)">Date <span class="sort-icon">↕</span></th>
+                                <th onclick="sortCritical('customer', this)">Customer <span class="sort-icon">↕</span></th>
+                                <th onclick="sortCritical('staff', this)">Staff <span class="sort-icon">↕</span></th>
+                                <th onclick="sortCritical('type', this)">Type <span class="sort-icon">↕</span></th>
+                                <th onclick="sortCritical('logged', this)">Logged <span class="sort-icon">↕</span></th>
+                                <th onclick="sortCritical('expected', this)">Expected Payout <span class="sort-icon">↕</span></th>
                                 <th>Action</th>
                             </tr>
                         </thead>
@@ -2306,15 +2379,15 @@
                         <table>
                             <thead>
                                 <tr>
-                                    <th>Date</th>
-                                    <th>Customer</th>
-                                    <th>Staff</th>
-                                    <th>Type</th>
-                                    <th>Logged</th>
-                                    <th>SSC Payout</th>
-                                    <th>Expected</th>
-                                    <th>Difference</th>
-                                    <th>Status</th>
+                                    <th onclick="sortMissed('date', this)">Date <span class="sort-icon">↕</span></th>
+                                    <th onclick="sortMissed('customer', this)">Customer <span class="sort-icon">↕</span></th>
+                                    <th onclick="sortMissed('staff', this)">Staff <span class="sort-icon">↕</span></th>
+                                    <th onclick="sortMissed('type', this)">Type <span class="sort-icon">↕</span></th>
+                                    <th onclick="sortMissed('logged', this)">Logged <span class="sort-icon">↕</span></th>
+                                    <th onclick="sortMissed('sscPayout', this)">SSC Payout <span class="sort-icon">↕</span></th>
+                                    <th onclick="sortMissed('expected', this)">Expected <span class="sort-icon">↕</span></th>
+                                    <th onclick="sortMissed('difference', this)">Difference <span class="sort-icon">↕</span></th>
+                                    <th onclick="sortMissed('status', this)">Status <span class="sort-icon">↕</span></th>
                                     <th style="width: 70px; text-align: center;">Proof</th>
                                     <th style="width: 230px;">Action</th>
                                 </tr>
@@ -3106,11 +3179,16 @@
                 function cleanValue(val, colName) {
                     if (val === null || val === undefined) return '';
                     const s = String(val);
-                    // Format ISO dates (e.g. "2026-03-16T03:00:48.000Z") to MM/DD/YYYY
-                    if (colName.toLowerCase().includes('date') && /^\d{4}-\d{2}-\d{2}T/.test(s)) {
-                        const d = new Date(s);
-                        if (!isNaN(d.getTime())) {
-                            return `${d.getMonth()+1}/${d.getDate()}/${d.getFullYear()}`;
+                    // Normalize ISO timestamps (e.g. "2026-03-16T03:00:48.000Z") to M/D/YYYY by
+                    // reading the date PART directly out of the string. Never route this through
+                    // new Date()+getMonth()/getDate(), whose LOCAL-timezone components can shift a
+                    // near-midnight-UTC instant back a day (e.g. "...T03:00Z" -> Mar 15 in EDT),
+                    // corrupting the date on re-save. Extracting the literal Y-M-D keeps the saved
+                    // value consistent with how parseDate reads it back.
+                    if (colName.toLowerCase().includes('date')) {
+                        const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})T/);
+                        if (iso) {
+                            return `${parseInt(iso[2], 10)}/${parseInt(iso[3], 10)}/${iso[1]}`;
                         }
                     }
                     return val;
@@ -3229,8 +3307,11 @@
             const headerRow = rows[headerRowIndex];
             const dataRows = rows.slice(headerRowIndex + 1);
 
-            return dataRows.map(row => {
+            return dataRows.map((row, j) => {
                 const obj = {};
+                // True 1-indexed sheet row (header is at headerRowIndex+1, data starts next).
+                // Non-enumerable so it never leaks into column lists, filters, or exports.
+                Object.defineProperty(obj, '__sheetRow', { value: headerRowIndex + 2 + j, enumerable: false });
                 headerRow.forEach((col, idx) => {
                     let val = row[idx] !== undefined ? row[idx] : null;
                     if (col && col.trim()) {
@@ -3649,7 +3730,7 @@
                 const linkedTransactionId = linkedTxCol ? (row[linkedTxCol] || null) : null;
                 const reconNote = noteCol ? (row[noteCol] || null) : null;
                 const loggedBy = loggedByCol ? (row[loggedByCol] || null) : null;
-                const sheetRow = idx + 2; // +1 for 0-index, +1 for header row
+                const sheetRow = row.__sheetRow || (idx + 2); // true sheet row; fallback to positional
 
                 if (entries[key]) {
                     entries[key].owed += parseFloat(row[owedCol]) || 0;
@@ -3827,8 +3908,11 @@
 
                     // ============================================================
                     // SEPARATE MISSED APPOINTMENTS before normal matching
-                    // F1: rows where service starts with "Missed"
-                    // F2: entries whose services list contains only Missed* types
+                    // F1: rows where ANY service part starts with "Missed"
+                    // F2: entries whose services list contains ANY Missed* type
+                    //     (must mirror F1 — using "every" here would drop mixed
+                    //     "Missed + real service" SSC transactions into the normal
+                    //     bucket, falsely flagging the F1 row as CRITICAL/unpaid)
                     // ============================================================
                     function isMissedF1(entry) {
                         // Check each comma-separated service — if ANY starts with "Missed", it's a missed row
@@ -3838,7 +3922,7 @@
 
                     function isMissedF2(entry) {
                         const svcs = entry.services || [];
-                        return svcs.length > 0 && svcs.every(s => (s.type || s).toLowerCase().startsWith('missed'));
+                        return svcs.some(s => (s.type || s).toLowerCase().startsWith('missed'));
                     }
 
                     // Missed F1 entries bypass the date range filter entirely —
@@ -4438,6 +4522,89 @@
         }
 
         // ============================================================
+        // SORTING — Critical banner + Missed appointments tables
+        // Sort is applied at render time so the two tables sort independently
+        // and the shared missedResults array is never mutated.
+        // ============================================================
+        let criticalSort = { column: null, direction: 'asc' };
+        let missedSort = { column: null, direction: 'asc' };
+        let criticalDateScope = 'all'; // 'all' | 'range'
+
+        function setCriticalScope(scope) {
+            criticalDateScope = scope;
+            const allBtn = document.getElementById('critScopeAll');
+            const rangeBtn = document.getElementById('critScopeRange');
+            if (allBtn) allBtn.classList.toggle('active', scope === 'all');
+            if (rangeBtn) rangeBtn.classList.toggle('active', scope === 'range');
+            renderCriticalBanner();
+        }
+        const MISSED_NUMERIC_COLS = new Set(['date', 'customer', 'logged', 'expected', 'sscPayout', 'difference']);
+
+        function missedSortVal(row, column) {
+            switch (column) {
+                case 'date': return row.serviceDate instanceof Date ? row.serviceDate.getTime() : (row.serviceDate ? (parseDate(row.serviceDate) ? parseDate(row.serviceDate).getTime() : null) : null);
+                case 'customer': return row.customerCode;
+                case 'staff': return row.loggedBy;
+                case 'type': return row.servicesDisplay;
+                case 'logged': return row.loggedOwed;
+                case 'expected': return row.expectedPayout;
+                case 'sscPayout': return row.sscPayout;
+                case 'difference': return row.payoutDiff;
+                case 'status': return row.missedStatus || row.payoutStatus;
+                default: return null;
+            }
+        }
+
+        function compareMissedRows(a, b, column, direction) {
+            let va = missedSortVal(a, column);
+            let vb = missedSortVal(b, column);
+            let result;
+            if (MISSED_NUMERIC_COLS.has(column)) {
+                va = (va === null || va === undefined) ? -Infinity : Number(va);
+                vb = (vb === null || vb === undefined) ? -Infinity : Number(vb);
+                result = va < vb ? -1 : va > vb ? 1 : 0;
+            } else {
+                va = (va === null || va === undefined) ? '' : String(va);
+                vb = (vb === null || vb === undefined) ? '' : String(vb);
+                result = va.localeCompare(vb, undefined, { numeric: true });
+            }
+            return direction === 'asc' ? result : -result;
+        }
+
+        function applyMissedSort(rows, state) {
+            if (!state.column) return rows;
+            return rows.slice().sort((a, b) => compareMissedRows(a, b, state.column, state.direction));
+        }
+
+        function setSortIcons(thEl, direction) {
+            const table = thEl.closest('table');
+            if (table) {
+                table.querySelectorAll('th').forEach(th => {
+                    th.classList.remove('sorted');
+                    const ic = th.querySelector('.sort-icon');
+                    if (ic) ic.textContent = '↕';
+                });
+            }
+            thEl.classList.add('sorted');
+            const ic = thEl.querySelector('.sort-icon');
+            if (ic) ic.textContent = direction === 'asc' ? '↑' : '↓';
+        }
+
+        function sortCritical(column, thEl) {
+            if (criticalSort.column === column) criticalSort.direction = criticalSort.direction === 'asc' ? 'desc' : 'asc';
+            else { criticalSort.column = column; criticalSort.direction = 'asc'; }
+            setSortIcons(thEl, criticalSort.direction);
+            renderCriticalBanner();
+        }
+
+        function sortMissed(column, thEl) {
+            if (missedSort.column === column) missedSort.direction = missedSort.direction === 'asc' ? 'desc' : 'asc';
+            else { missedSort.column = column; missedSort.direction = 'asc'; }
+            setSortIcons(thEl, missedSort.direction);
+            renderOrphanCards();
+        }
+
+        // ============================================================
         // WARNING DETECTION
         // ============================================================
         function detectWarnings(row) {
@@ -4534,6 +4701,13 @@
                     <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" />
                 </svg>
             </a>`;
+        }
+
+        // Labeled link that opens this transaction's row in the Google Sheet
+        function sheetRowLinkHTML(sourceRow) {
+            if (!sourceRow) return '';
+            const url = `https://docs.google.com/spreadsheets/d/${FILE1_SHEET_ID}/edit#gid=0&range=D${sourceRow}`;
+            return `<a href="${url}" target="_blank" rel="noopener" class="open-sheet-link" title="Open row ${sourceRow} in the Google Sheet to check details">↗ Open row in sheet</a>`;
         }
 
         // ============================================================
@@ -4749,16 +4923,53 @@
         function renderCriticalBanner() {
             if (!reconciliationResults) return;
             const r = reconciliationResults;
-            const criticalRows = (r.missedResults || []).filter(row => row.missedStatus === 'CRITICAL' && !row.reconciled);
+            let allCriticalRows = (r.missedResults || []).filter(row => row.missedStatus === 'CRITICAL' && !row.reconciled);
             const criticalBanner = document.getElementById('criticalBanner');
             const criticalBody = document.getElementById('criticalBody');
             criticalBody.innerHTML = '';
 
-            if (criticalRows.length > 0) {
-                criticalBanner.classList.add('show');
-                document.getElementById('criticalCount').textContent = criticalRows.length;
+            // Hide the whole banner only when there are no unpaid missed appointments at all
+            if (allCriticalRows.length === 0) {
+                criticalBanner.classList.remove('show');
+                return;
+            }
+            criticalBanner.classList.add('show');
 
-                const criticalTxOptions = (file1Data || [])
+            // Optional date-range scoping (toggle in the banner toolbar)
+            const dr = r.dateRange;
+            const rangeAvailable = !!(dr && dr.min && dr.max);
+            const rangeBtn = document.getElementById('critScopeRange');
+            if (rangeBtn) {
+                rangeBtn.disabled = !rangeAvailable;
+                rangeBtn.title = rangeAvailable
+                    ? `Show only ${formatDate(dr.min)} – ${formatDate(dr.max)}`
+                    : 'No date range available for this report';
+            }
+
+            let criticalRows = allCriticalRows;
+            if (criticalDateScope === 'range' && rangeAvailable) {
+                const minTime = dr.min.getTime();
+                const maxTime = dr.max.getTime() + 86400000;
+                criticalRows = criticalRows.filter(row => {
+                    const d = row.serviceDate instanceof Date ? row.serviceDate : parseDate(row.serviceDate);
+                    return d && d.getTime() >= minTime && d.getTime() <= maxTime;
+                });
+            }
+            criticalRows = applyMissedSort(criticalRows, criticalSort);
+
+            // Count shows visible/total when the range filter hides some
+            document.getElementById('criticalCount').textContent =
+                (criticalRows.length !== allCriticalRows.length)
+                    ? `${criticalRows.length}/${allCriticalRows.length}`
+                    : criticalRows.length;
+
+            // Empty state when the range filter excludes everything (banner + toggle stay visible)
+            if (criticalRows.length === 0) {
+                criticalBody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:18px;color:var(--text-secondary);">No unpaid missed appointments in the selected date range.</td></tr>`;
+                return;
+            }
+
+            const criticalTxOptions = (file1Data || [])
                     .map(r => {
                         const idKey   = Object.keys(r).find(k => /transaction.*id/i.test(k));
                         const custKey = Object.keys(r).find(k => k.includes('Customer No') || k.includes('Customer Code'));
@@ -4800,6 +5011,8 @@
                     } else {
                         actionCell = `<button class="btn-reconcile" disabled title="Sign in with Google to enable this">Link Record</button>`;
                     }
+                    // Always offer a direct link to the row in the sheet to check details
+                    actionCell = sheetRowLinkHTML(row.sourceRow) + actionCell;
 
                     const tr = document.createElement('tr');
                     const loggedCell = row.loggedOwed
@@ -4809,7 +5022,7 @@
                         : '—';
                     tr.innerHTML = `
                         <td>${dateStr}</td>
-                        <td>${row.customerCode}</td>
+                        <td><span class="cust-cell"><span>${row.customerCode}</span>${copyCodeButtonHTML(row.customerCode)}</span></td>
                         <td>${staffCell(row)}</td>
                         <td>${row.servicesDisplay}</td>
                         <td>${loggedCell}</td>
@@ -4837,9 +5050,6 @@
                     }
                     criticalBody.appendChild(tr);
                 }
-            } else {
-                criticalBanner.classList.remove('show');
-            }
         }
 
         // ============================================================
@@ -4850,7 +5060,7 @@
 
             // Always refresh the critical banner too
             renderCriticalBanner();
-            const missedRows = r.missedResults || [];
+            const missedRows = applyMissedSort(r.missedResults || [], missedSort);
             const cardMissed = document.getElementById('cardMissed');
             const bodyMissed = document.getElementById('missedBody');
             bodyMissed.innerHTML = '';
@@ -4945,7 +5155,7 @@
 
                     tr.innerHTML = `
                         <td>${dateStr}</td>
-                        <td>${row.customerCode}</td>
+                        <td><span class="cust-cell"><span>${row.customerCode}</span>${copyCodeButtonHTML(row.customerCode)}</span></td>
                         <td>${staffCell(row)}</td>
                         <td>${row.servicesDisplay}</td>
                         <td>${loggedCell}</td>
@@ -5006,7 +5216,7 @@
                     const tr = document.createElement('tr');
                     tr.innerHTML = `
                         <td>${formatDate(row.serviceDate)}</td>
-                        <td>${row.customerCode}</td>
+                        <td><span class="cust-cell"><span>${row.customerCode}</span>${copyCodeButtonHTML(row.customerCode)}</span></td>
                         <td>${staffCell(row)}</td>
                         <td>${row.servicesDisplay}</td>
                         <td>${row.owedFile1 !== undefined ? '$' + row.owedFile1.toFixed(2) : '-'}</td>
@@ -5032,7 +5242,7 @@
                     const tr = document.createElement('tr');
                     tr.innerHTML = `
                         <td>${formatDate(row.serviceDate)}</td>
-                        <td>${row.customerCode}</td>
+                        <td><span class="cust-cell"><span>${row.customerCode}</span>${copyCodeButtonHTML(row.customerCode)}</span></td>
                         <td>${staffCell(row)}</td>
                         <td>${row.servicesDisplay}</td>
                         <td>${row.owedFile2 !== undefined ? '$' + row.owedFile2.toFixed(2) : '-'}</td>
