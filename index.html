@@ -2918,6 +2918,9 @@
 
         async function listSavedPayrolls() {
             if (!isGoogleAuthed()) return;
+            // The set of saved payrolls may have changed (save/delete) — drop the
+            // pooled missed index so it rebuilds from the current tabs on next use.
+            invalidateCrossPeriodIndex();
             try {
                 const resp = await fetch(
                     `https://sheets.googleapis.com/v4/spreadsheets/${FILE1_SHEET_ID}?fields=sheets.properties.title`,
@@ -3263,6 +3266,162 @@
             } catch (e) {
                 console.error('loadPayrollFromSheet error:', e);
                 showToast('Failed to load: ' + e.message, 'error');
+            }
+        }
+
+        // ============================================================
+        // CROSS-PERIOD MISSED INDEX
+        // A missed appointment is only genuinely "unpaid" if SSC has no
+        // record of it in ANY saved payroll period — not just the one
+        // currently loaded. Reconciliation matches against the loaded
+        // payroll only, so a missed row paid in a different period stays
+        // flagged CRITICAL until that period happens to be loaded. This
+        // builds a pooled index of missed-classified SSC entries across
+        // every saved "Payroll: ..." tab so the CRITICAL check can clear
+        // anything SSC already paid in another period.
+        // ============================================================
+        let _crossPeriodMissedIndex = null;   // { byKey, byCustomer } once built
+        let _crossPeriodMissedPromise = null;
+
+        function invalidateCrossPeriodIndex() {
+            _crossPeriodMissedIndex = null;
+            _crossPeriodMissedPromise = null;
+        }
+
+        function _cpDateKey(d) {
+            return d ? `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` : 'nodate';
+        }
+
+        async function buildCrossPeriodMissedIndex(force) {
+            if (!isGoogleAuthed()) return null;
+            if (_crossPeriodMissedIndex && !force) return _crossPeriodMissedIndex;
+            if (_crossPeriodMissedPromise && !force) return _crossPeriodMissedPromise;
+
+            _crossPeriodMissedPromise = (async () => {
+                // 1. Discover all saved payroll tabs
+                const metaResp = await fetch(
+                    `https://sheets.googleapis.com/v4/spreadsheets/${FILE1_SHEET_ID}?fields=sheets.properties.title`,
+                    { headers: { Authorization: `Bearer ${googleAccessToken}` } }
+                );
+                if (!metaResp.ok) throw new Error('Failed to list payroll tabs');
+                const meta = await metaResp.json();
+                const titles = (meta.sheets || [])
+                    .map(s => s.properties.title)
+                    .filter(t => t.startsWith(PAYROLL_PREFIX));
+
+                // 2. Read + extract missed entries from every tab (in parallel)
+                const perTab = await Promise.all(titles.map(async (title) => {
+                    try {
+                        const resp = await fetch(
+                            `https://sheets.googleapis.com/v4/spreadsheets/${FILE1_SHEET_ID}/values/${encodeURIComponent(title)}?valueRenderOption=UNFORMATTED_VALUE`,
+                            { headers: { Authorization: `Bearer ${googleAccessToken}` } }
+                        );
+                        if (!resp.ok) return null;
+                        const json = await resp.json();
+                        const rows = json.values || [];
+                        if (rows.length < 2) return null;
+                        const headers = rows[0];
+                        const data = rows.slice(1).map(row => {
+                            const obj = {};
+                            headers.forEach((h, idx) => { obj[h] = row[idx] !== undefined ? row[idx] : null; });
+                            return obj;
+                        }).filter(r => Object.values(r).some(v => v !== null && v !== undefined && v !== ''));
+                        if (data.length === 0) return null;
+                        const entries = extractFile2Totals(
+                            data,
+                            findCustomerColumn(data), findOwedColumn(data), findMethodColumn(data),
+                            findDateColumn(data), findChargesColumn(data), findFeesColumn(data)
+                        );
+                        return { period: title.replace(PAYROLL_PREFIX, ''), entries };
+                    } catch (e) {
+                        console.error('cross-period read failed for', title, e);
+                        return null;
+                    }
+                }));
+
+                // 3. Pool the missed-classified entries
+                const byKey = {};       // "cust_YYYY-MM-DD" -> { period, payout, services }
+                const byCustomer = {};  // cust -> [{ date, payout, period }]
+                for (const tab of perTab) {
+                    if (!tab) continue;
+                    for (const [key, e] of Object.entries(tab.entries)) {
+                        const isMissed = (e.services || []).some(s => (s.type || s).toLowerCase().startsWith('missed'));
+                        if (!isMissed) continue;
+                        if (!byKey[key]) byKey[key] = { period: tab.period, payout: e.payout, services: e.services };
+                        if (e.date) {
+                            if (!byCustomer[e.customer]) byCustomer[e.customer] = [];
+                            byCustomer[e.customer].push({ date: e.date, payout: e.payout, period: tab.period });
+                        }
+                    }
+                }
+                _crossPeriodMissedIndex = { byKey, byCustomer };
+                return _crossPeriodMissedIndex;
+            })();
+
+            try {
+                return await _crossPeriodMissedPromise;
+            } catch (e) {
+                _crossPeriodMissedPromise = null; // allow a later retry
+                throw e;
+            }
+        }
+
+        // Look up a CRITICAL row against the pooled index:
+        // exact customer+date first, then the same customer's closest missed
+        // entry within a small tolerance (mirrors the in-period fuzzy match,
+        // bounded so it can't reach across distant periods by accident).
+        function lookupCrossPeriodMissed(idx, customerCode, serviceDate) {
+            if (!idx) return null;
+            const exact = idx.byKey[`${customerCode}_${_cpDateKey(serviceDate)}`];
+            if (exact) return exact;
+            const list = idx.byCustomer[customerCode];
+            if (list && serviceDate) {
+                const TOL = 4 * 86400000; // ±4 days
+                let best = null, bestDist = Infinity;
+                for (const c of list) {
+                    const dist = Math.abs(serviceDate.getTime() - c.date.getTime());
+                    if (dist <= TOL && dist < bestDist) { bestDist = dist; best = c; }
+                }
+                if (best) return { period: best.period, payout: best.payout, services: null };
+            }
+            return null;
+        }
+
+        // After a reconciliation, clear any CRITICAL row that SSC actually
+        // paid in a different saved period, then re-render.
+        async function applyCrossPeriodMissedCheck() {
+            if (!reconciliationResults || !isGoogleAuthed()) return;
+            let idx;
+            try {
+                idx = await buildCrossPeriodMissedIndex();
+            } catch (e) {
+                console.error('cross-period check skipped:', e);
+                return;
+            }
+            if (!idx) return;
+
+            let changed = 0;
+            for (const row of (reconciliationResults.missedResults || [])) {
+                if (row.missedStatus !== 'CRITICAL' || row.reconciled) continue;
+                const hit = lookupCrossPeriodMissed(idx, row.customerCode, row.serviceDate);
+                if (!hit) continue;
+                const expected = row.expectedPayout || 0;
+                const payout = (hit.payout != null) ? hit.payout : expected;
+                const diff = payout - expected;
+                const isMatch = Math.abs(diff) < 0.01;
+                row.missedStatus = 'MATCHED';
+                row.payoutStatus = isMatch ? 'MATCH' : 'MISMATCH';
+                row.sscPayout = (hit.payout != null) ? hit.payout : row.sscPayout;
+                row.payoutDiff = isMatch ? 0 : diff;
+                row.paidInPeriod = hit.period; // shown on the matched row
+                changed++;
+            }
+
+            if (changed > 0) {
+                if (typeof reconciliationResults.missedCritical === 'number') {
+                    reconciliationResults.missedCritical = Math.max(0, reconciliationResults.missedCritical - changed);
+                }
+                renderOrphanCards(); // refreshes the critical banner + missed table from the updated data
             }
         }
 
@@ -4462,6 +4621,12 @@
 
                     displayResults();
 
+                    // Clear any missed rows SSC actually paid in another saved
+                    // period (async — refreshes the banner when the pooled index
+                    // is ready). Without this, a missed appointment paid in a
+                    // different period stays falsely flagged CRITICAL.
+                    applyCrossPeriodMissedCheck();
+
                 } catch (error) {
                     loadingDiv.classList.remove('show');
                     loadingDiv.innerHTML = `<div style="color: var(--error); padding: 24px; text-align: center;">
@@ -5096,6 +5261,10 @@
                     } else {
                         const sc = row.payoutStatus === 'MATCH' ? 'status-match' : 'status-mismatch';
                         missedBadge = `<span class="status-badge ${sc}">${row.payoutStatus}</span>`;
+                        // Cross-period clear: SSC paid this in a different saved period
+                        if (row.paidInPeriod) {
+                            missedBadge += `<div style="font-size:0.7rem;color:var(--text-secondary);margin-top:3px;">paid in ${escapeHtml(row.paidInPeriod)}</div>`;
+                        }
                     }
 
                     const authed = isGoogleAuthed();
