@@ -2347,7 +2347,7 @@
                                     <th onclick="sortUnified('owedFile1', this)">Ours <span class="sort-icon">↕</span></th>
                                     <th onclick="sortUnified('owedFile2', this)">SSC <span class="sort-icon">↕</span></th>
                                     <th onclick="sortUnified('paymentDiff', this)">Difference <span class="sort-icon">↕</span></th>
-                                    <th onclick="sortUnified('paymentStatus', this)">Status <span class="sort-icon">↕</span></th>
+                                    <th onclick="sortUnified('status', this)">Status <span class="sort-icon">↕</span></th>
                                     <th style="width: 70px; text-align: center;">Proof</th>
                                     <th style="width: 130px;">Action</th>
                                 </tr>
@@ -4646,6 +4646,33 @@
         // ============================================================
         let currentSort = { column: null, direction: 'asc' };
 
+        // Per-column sort keys for the Reconciliation Details table.
+        // Categorical columns (Status) use a meaningful rank, not alphabetical:
+        // a visit counts as "matched" only when BOTH the client-payment and the
+        // SSC-payout sides match, so any mismatch on either row sorts after the
+        // clean ones. Amount columns sort numerically; Staff sorts by name.
+        const UNIFIED_NUMERIC_COLS = new Set(['serviceDate', 'customerCode', 'owedFile1', 'owedFile2', 'paymentDiff', 'status']);
+
+        function unifiedSortVal(row, column) {
+            switch (column) {
+                case 'serviceDate':
+                    return row.serviceDate instanceof Date
+                        ? row.serviceDate.getTime()
+                        : (parseDate(row.serviceDate) ? parseDate(row.serviceDate).getTime() : -Infinity);
+                case 'customerCode': return Number(row.customerCode);
+                case 'loggedBy':     return (row.loggedBy || '').toString().toLowerCase();
+                case 'owedFile1':    return row.owedFile1;
+                case 'owedFile2':    return row.owedFile2;
+                case 'paymentDiff':  return row.paymentDiff;
+                case 'status': {
+                    // 0 = fully matched (clean), 1 = any mismatch → asc shows matches first
+                    const mismatch = row.paymentStatus === 'MISMATCH' || row.payoutStatus === 'MISMATCH';
+                    return mismatch ? 1 : 0;
+                }
+                default: return row[column];
+            }
+        }
+
         function sortUnified(column, thEl) {
             if (currentSort.column === column) {
                 currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
@@ -4655,22 +4682,17 @@
             }
 
             reconciliationResults.details.sort((a, b) => {
-                let valA = a[column];
-                let valB = b[column];
-
-                if (column === 'serviceDate') {
-                    valA = valA ? (valA instanceof Date ? valA.getTime() : (parseDate(valA) || new Date(0)).getTime()) : 0;
-                    valB = valB ? (valB instanceof Date ? valB.getTime() : (parseDate(valB) || new Date(0)).getTime()) : 0;
-                }
-
-                if (valA === undefined || valA === null) valA = -Infinity;
-                if (valB === undefined || valB === null) valB = -Infinity;
-
-                let result = 0;
-                if (typeof valA === 'string' && typeof valB === 'string') {
-                    result = valA.localeCompare(valB, undefined, { numeric: true });
+                let va = unifiedSortVal(a, column);
+                let vb = unifiedSortVal(b, column);
+                let result;
+                if (UNIFIED_NUMERIC_COLS.has(column)) {
+                    va = (va === null || va === undefined) ? -Infinity : Number(va);
+                    vb = (vb === null || vb === undefined) ? -Infinity : Number(vb);
+                    result = va < vb ? -1 : va > vb ? 1 : 0;
                 } else {
-                    result = valA < valB ? -1 : valA > valB ? 1 : 0;
+                    va = (va === null || va === undefined) ? '' : String(va);
+                    vb = (vb === null || vb === undefined) ? '' : String(vb);
+                    result = va.localeCompare(vb, undefined, { numeric: true });
                 }
                 return currentSort.direction === 'asc' ? result : -result;
             });
@@ -4707,7 +4729,7 @@
             if (rangeBtn) rangeBtn.classList.toggle('active', scope === 'range');
             renderCriticalBanner();
         }
-        const MISSED_NUMERIC_COLS = new Set(['date', 'customer', 'logged', 'expected', 'sscPayout', 'difference']);
+        const MISSED_NUMERIC_COLS = new Set(['date', 'customer', 'logged', 'expected', 'sscPayout', 'difference', 'status']);
 
         function missedSortVal(row, column) {
             switch (column) {
@@ -4719,7 +4741,14 @@
                 case 'expected': return row.expectedPayout;
                 case 'sscPayout': return row.sscPayout;
                 case 'difference': return row.payoutDiff;
-                case 'status': return row.missedStatus || row.payoutStatus;
+                case 'status': {
+                    // Rank by meaning, not alphabetically: clean matches first,
+                    // then payout mismatches, then SSC-only, then unpaid (CRITICAL).
+                    if (row.missedStatus === 'CRITICAL') return 3;
+                    if (row.missedStatus === 'SSC_ONLY') return 2;
+                    if (row.missedStatus === 'MATCHED') return row.payoutStatus === 'MISMATCH' ? 1 : 0;
+                    return 4;
+                }
                 default: return null;
             }
         }
